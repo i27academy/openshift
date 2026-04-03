@@ -1,10 +1,15 @@
-# This is the complete, step-by-step technical guide to deploy a **Red Hat OpenShift Container Platform** cluster on **Google Cloud Platform (GCP)** using the **Installer Provisioned Infrastructure (IPI)** method.
 
 -----
 
-##  Phase 1: Control Node & User Setup
+# OpenShift Container Platform Deployment Guide: GCP IPI
 
-**Goal:** Create a stable, persistent environment for the installation process to avoid session timeouts.
+This guide provides a comprehensive, step-by-step workflow to provision an OpenShift cluster on Google Cloud using **Installer Provisioned Infrastructure (IPI)**.
+
+-----
+
+## Phase 1: Control Node & User Setup
+
+**Goal:** Establish a persistent environment, elevate privileges, and verify cloud authentication.
 
 ### 1\. Provision the Installer VM
 
@@ -15,82 +20,69 @@ In your GCP Console, create a VM with these specifications:
   * **OS:** Ubuntu 22.04 LTS
   * **Disk:** 20GB Standard Persistent Disk
 
-### 2\. Configure the Student User (`siva`)
+### 2\. Configure the User (`siva`)
 
-SSH into your VM and run these commands to create a dedicated user and enable password-based access for remote SSH.
+SSH into your VM and run these commands to create a dedicated user and configure SSH access.
 
 ```bash
 # 1. Create the user 'siva'
 sudo adduser siva
 
-# 2. Grant sudo (administrator) privileges
+# 2. Grant sudo privileges
 sudo usermod -aG sudo siva
 
-# 3. Enable Password Authentication for SSH access
-sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
-sudo sed -i 's/KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+# 3. Configure SSH for password-based access
+sudo sed -i 's/^Include \/etc\/ssh\/sshd_config.d\/\*\.conf/#&/' /etc/ssh/sshd_config
+sudo sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
-# 4. Restart the SSH service to apply changes
+# 4. Restart the SSH service
 sudo systemctl restart ssh
 ```
 
-> **Note:** Log out of the root session and log back in as **siva** to ensure all subsequent files are owned by the correct user.
+### 3\. Connect, Elevate, and Initialize GCP
+
+1.  **Login to the VM:** From your local terminal:
+    `ssh siva@<VM_EXTERNAL_IP>`
+2.  **Elevate to Root & Create Workspace:**
+    ```bash
+    sudo -i
+    mkdir -p /root/ocp
+    cd /root/ocp
+    ```
+3.  **Authenticate GCP:** `gcloud auth login`
+4.  **Set Active Project:**
+    ```bash
+    # Set your project ID (Replace with your actual ID)
+    export GCP_PROJECT_ID=<ENTER_YOUR_PROJECT_ID_HERE>
+    gcloud config set project $GCP_PROJECT_ID
+    ```
+5.  **Verify Authentication:** `gcloud compute instances list`
 
 -----
 
 ## 🌐 Phase 2: Red Hat Account & Pull Secret
 
-**Goal:** Authenticate your cluster with Red Hat to allow it to download protected container images.
-
 1.  **Register:** Create an account at [**console.redhat.com**](https://www.google.com/search?q=https://console.redhat.com/).
-2.  **Navigate:** Search for **Red Hat OpenShift** \> **Create Cluster**.
-3.  **Select Infrastructure:** Choose **Google Cloud Platform (GCP)**.
-4.  **Select Method:** Choose **Installer-provisioned infrastructure (IPI)**.
-5.  **Get Pull Secret:** Click **Download pull secret** or **Copy pull secret**. Keep this JSON string ready in a notepad.
+2.  **Navigate:** **Red Hat OpenShift** \> **Create Cluster** \> **Google Cloud Platform (GCP)**.
+3.  **Method:** Select **Installer-provisioned infrastructure (IPI)**.
+4.  **Pull Secret:** Click **Download pull secret** or **Copy pull secret**. Keep this string ready.
 
 -----
 
 ## ☁️ Phase 3: GCP Infrastructure & Identity Setup
 
-**Goal:** Prepare the Google Cloud "landing zone" and create the identity the installer will use.
-
-### 1\. Project Initialization
+### 1\. Enable Required Google APIs
 
 ```bash
-# Set your project ID (Replace with your actual ID)
-export GCP_PROJECT_ID=p**************
-
-# authenticate to gcp using your gmail account
-gcloud auth login 
-
-
-gcloud config set project $GCP_PROJECT_ID
-
-# Set default region and zone
-gcloud config set compute/region us-central1
-gcloud config set compute/zone us-central1-a
+gcloud services enable compute.googleapis.com cloudapis.googleapis.com \
+    cloudresourcemanager.googleapis.com dns.googleapis.com \
+    iamcredentials.googleapis.com iam.googleapis.com \
+    servicemanagement.googleapis.com serviceusage.googleapis.com \
+    storage-api.googleapis.com storage-component.googleapis.com \
+    deploymentmanager.googleapis.com file.googleapis.com
 ```
 
-### 2\. Enable Required Google APIs
-
-Enable the APIs required for OpenShift to manage VPCs, DNS, and Compute instances.
-
-```bash
-gcloud services enable compute.googleapis.com \
-    cloudapis.googleapis.com \
-    cloudresourcemanager.googleapis.com \
-    dns.googleapis.com \
-    iamcredentials.googleapis.com \
-    iam.googleapis.com \
-    servicemanagement.googleapis.com \
-    serviceusage.googleapis.com \
-    storage-api.googleapis.com \
-    storage-component.googleapis.com \
-    deploymentmanager.googleapis.com \
-    file.googleapis.com --project $GCP_PROJECT_ID
-```
-
-### 3\. DNS Configuration (Managed Zone)
+### 2\. DNS Configuration
 
 ```bash
 export GCP_DOMAIN=i27openshift.com
@@ -100,61 +92,46 @@ gcloud dns managed-zones create i27openshift-dns --dns-name=$GCP_DOMAIN. --descr
 gcloud dns managed-zones describe i27openshift-dns
 ```
 
-> **Critical Note:** Copy the 4 Name Servers provided and update them in **GoDaddy**. Remove the trailing dot (`.`) when pasting. Verify propagation with `nslookup -q=ns i27openshift.com`.
+> **Action:** Update these Name Servers in your registrar.
+> **Verify propagation:** `nslookup -q=ns $GCP_DOMAIN`
 
-### 4\. Create Installer Service Account
+### 3\. Create Installer Service Account
 
 ```bash
 export GCP_SA=i27-gcp-sa-ocp
-# Create SA 
 gcloud iam service-accounts create $GCP_SA --display-name="i27 Openshift cluster sa"
-#  Grant 'Owner' Permissions for the service account
+
 gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
     --member="serviceAccount:$GCP_SA@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/owner"
-# Create directory and generate the JSON key file
-sudo -i
-mkdir -p ~/ocp
-gcloud iam service-accounts keys create ~/ocp/i27-gcp-sa-ocp-key.json \
+
+# Generate the JSON key file using the absolute path
+gcloud iam service-accounts keys create /root/ocp/i27-gcp-sa-ocp-key.json \
     --iam-account=$GCP_SA@$GCP_PROJECT_ID.iam.gserviceaccount.com
-```
-
-### 5\. Open Firewall for Testing
-
-```bash
-gcloud compute --project=$GCP_PROJECT_ID firewall-rules create allow-all-for-i27-openshift \
-    --direction=INGRESS --priority=1000 --network=default --action=ALLOW --rules=all --source-ranges=0.0.0.0/0
 ```
 
 -----
 
 ## 📦 Phase 4: Downloading & Preparing Binaries
 
-**Goal:** Install the tools required to build and manage the cluster.
-
-### 1\. Download & Extract
-
 ```bash
-cd ~/ocp
-
-# Download Installer & Client
+cd /root/ocp
 wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-install-linux.tar.gz
 wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-client-linux.tar.gz
 
-# Extract and Move to System Path
 tar -xvzf openshift-install-linux.tar.gz
 tar -xvzf openshift-client-linux.tar.gz
-sudo mv openshift-install oc kubectl /usr/local/bin/
-```
 
-### 2\. Generate SSH Keys
+# Copy the client binaries to the system path (do not move)
+sudo cp oc kubectl /usr/local/bin/
 
-```bash
+# Generate a new Ed25519 SSH key pair without a passphrase and save it to the default directory
 ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_rsa
-# Starts SSH agent to manage keys. This loads the key into memory . 
-# Now system can: Use SSH automatically and Authenticate to servers
+
+# Start the SSH agent in the background to manage and store your private keys
 eval "$(ssh-agent -s)"
-# Add Key to Agent
+
+# Add the newly generated private key to the SSH agent for automated authentication
 ssh-add ~/.ssh/id_rsa
 ```
 
@@ -162,37 +139,41 @@ ssh-add ~/.ssh/id_rsa
 
 ## 🛠️ Phase 5: Credentials & Config Generation
 
-**Goal:** Connect the installer to your GCP identity and define the cluster blueprint.
-
-### 1\. Export Credentials
-
-**Important:** The installer will not automatically find your key unless you set this path.
-
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/root/ocp/i27-gcp-sa-ocp-key.json
 export OPENSHIFT_INSTALL_GCP_CREDENTIALS_MODE=manual
+
+mkdir -p /root/ocp/i27-cluster
+# Generate the cluster configuration
+./openshift-install create install-config --dir=/root/ocp/i27-cluster
 ```
 
-### 2\. Generate Cluster Configuration
+### Verify, Backup & Customize Configuration
 
-This command creates the `install-config.yaml` file.
+Before deploying the cluster, verify the file and prepare your custom configuration.
 
-```bash
-mkdir -p ~/ocp/i27-cluster
-openshift-install create install-config --dir=~/ocp/i27-cluster
-```
+1.  **Verify & Backup:**
 
-**Prompts:** Select **ssh key**, **gcp**, Project ID, **us-central1**, base domain **i27openshift.com**, cluster name **i27-cluster**, and paste your **Pull Secret**.
+    ```bash
+    # Verify file exists
+    ls /root/ocp/i27-cluster/install-config.yaml
+
+    # Create a backup of the original configuration
+    cp /root/ocp/i27-cluster/install-config.yaml /root/ocp/i27-cluster/install-config-ORIGINAL.yaml
+    ```
+
+2.  **Customize for Deployment:**
+    You must now modify the `install-config.yaml` to meet your production requirements (e.g., node counts, machine types). Use the following link as a template:
+
+    > **Reference Link:** [i27Academy GitHub - install-config.yaml](https://github.com/i27academy/openshift/blob/main/Cluster-Creation/install-config.yaml)
+
+    ⚠️ **CRITICAL:** Do **not** directly copy and paste the GitHub file. It is provided strictly as a reference. You must modify your own local file based on this template to ensure specific fields like `pullSecret`, `sshKey`, and `projectID` remain correct for your environment.
 
 -----
 
-## 🚀 Phase 6: Launching & Verifying the Cluster
+## 🚀 Phase 6: Launching & Verifying
 
-**Goal:** Execute the build and verify the cluster health.
-
-### 1\. Trigger the Cluster Creation
-
-This takes 30–45 minutes.
+### 1\. Trigger Cluster Creation (Takes 30-45 mins)
 
 ```bash
 ./openshift-install create cluster --dir=/root/ocp/i27-cluster --log-level debug
@@ -201,30 +182,14 @@ This takes 30–45 minutes.
 ### 2\. Accessing the Cluster
 
 ```bash
-# Set Kubeconfig for CLI access
 export KUBECONFIG=/root/ocp/i27-cluster/auth/kubeconfig
-
-# Get login credentials
+# Get login info
 cat /root/ocp/i27-cluster/auth/kubeadmin-password
-
-# Get Web Console URL
 oc get route console -n openshift-console
-```
-
-### 3\. Verification Commands
-
-```bash
-oc get nodes
-oc get pods -n openshift-ingress
 ```
 
 ### ⚠️ Cleanup
 
-Always destroy the cluster when finished to avoid charges:
-
 ```bash
 ./openshift-install destroy cluster --dir=/root/ocp/i27-cluster --log-level debug
 ```
-
------
-
