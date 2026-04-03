@@ -1,0 +1,45 @@
+additionalTrustBundlePolicy: Proxyonly
+apiVersion: v1
+baseDomain: i27openshift.com
+compute:
+- architecture: amd64
+  hyperthreading: Enabled
+  name: worker
+  platform:
+    gcp:
+      type: n2-standard-4
+      osDisk:
+        diskType: pd-ssd
+        diskSizeGB: 50
+  replicas: 1
+controlPlane:
+  architecture: amd64
+  hyperthreading: Enabled
+  name: master
+  platform:
+    gcp:
+      type: n2-standard-4
+      osDisk:
+        diskType: pd-ssd
+        diskSizeGB: 100
+  replicas: 1
+metadata:
+  name: i27-ocp-cluster
+networking:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+  machineNetwork:
+  - cidr: 10.0.0.0/16
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+platform:
+  gcp:
+    firewallRulesManagement: Managed
+    projectID: YOUR_GCP_PROJECT_ID
+    region: us-central1
+publish: External
+pullSecret: YOUR_PULL_SECRET_COPIED_FROM_REHAT_CONSOLE_COMES_HERE
+sshKey: |
+  YOUR_SSH_KEY_COMES_HERE
