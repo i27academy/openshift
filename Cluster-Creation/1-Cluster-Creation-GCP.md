@@ -1,9 +1,26 @@
-
------
-
 # OpenShift Container Platform Deployment Guide: GCP IPI
 
 This guide provides a comprehensive, step-by-step workflow to provision an OpenShift cluster on Google Cloud using **Installer Provisioned Infrastructure (IPI)**.
+
+-----
+
+## 🛠️ Phase 0: Organization Policy Adjustment
+
+Before beginning the installation, you must ensure that your GCP project allows the creation of Service Account keys. Many organizations have a default policy that restricts this.
+
+1.  **Disable the Key Creation Restriction:**
+
+    ```bash
+    # Set your project ID
+    export GCP_PROJECT_ID=<ENTER_YOUR_PROJECT_ID_HERE>
+
+    # Disable the enforcement of the "Disable Service Account Key Creation" policy
+    gcloud resource-manager org-policies disable-enforce iam.disableServiceAccountKeyCreation --project=$GCP_PROJECT_ID
+    ```
+
+2.  **Wait for Propagation:**
+
+    > ⏳ **Important:** Please wait **3–5 minutes** after running the command above. GCP organization policies take a few moments to propagate across the infrastructure. Moving too fast may cause the Service Account key generation in Phase 3 to fail.
 
 -----
 
@@ -41,8 +58,7 @@ sudo systemctl restart ssh
 
 ### 3\. Connect, Elevate, and Initialize GCP
 
-1.  **Login to the VM:** From your local terminal:
-    `ssh siva@<VM_EXTERNAL_IP>`
+1.  **Login to the VM:** From your local terminal: `ssh siva@<VM_EXTERNAL_IP>`
 2.  **Elevate to Root & Create Workspace:**
     ```bash
     sudo -i
@@ -52,8 +68,6 @@ sudo systemctl restart ssh
 3.  **Authenticate GCP:** `gcloud auth login`
 4.  **Set Active Project:**
     ```bash
-    # Set your project ID (Replace with your actual ID)
-    export GCP_PROJECT_ID=<ENTER_YOUR_PROJECT_ID_HERE>
     gcloud config set project $GCP_PROJECT_ID
     ```
 5.  **Verify Authentication:** `gcloud compute instances list`
@@ -105,7 +119,7 @@ gcloud projects add-iam-policy-binding $GCP_PROJECT_ID \
     --member="serviceAccount:$GCP_SA@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
     --role="roles/owner"
 
-# Generate the JSON key file using the absolute path
+# Generate the JSON key file
 gcloud iam service-accounts keys create /root/ocp/i27-gcp-sa-ocp-key.json \
     --iam-account=$GCP_SA@$GCP_PROJECT_ID.iam.gserviceaccount.com
 ```
@@ -122,16 +136,10 @@ wget https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/ope
 tar -xvzf openshift-install-linux.tar.gz
 tar -xvzf openshift-client-linux.tar.gz
 
-# Copy the client binaries to the system path (do not move)
 sudo cp oc kubectl /usr/local/bin/
 
-# Generate a new Ed25519 SSH key pair without a passphrase and save it to the default directory
 ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_rsa
-
-# Start the SSH agent in the background to manage and store your private keys
 eval "$(ssh-agent -s)"
-
-# Add the newly generated private key to the SSH agent for automated authentication
 ssh-add ~/.ssh/id_rsa
 ```
 
@@ -144,36 +152,22 @@ export GOOGLE_APPLICATION_CREDENTIALS=/root/ocp/i27-gcp-sa-ocp-key.json
 export OPENSHIFT_INSTALL_GCP_CREDENTIALS_MODE=manual
 
 mkdir -p /root/ocp/i27-cluster
-# Generate the cluster configuration
 ./openshift-install create install-config --dir=/root/ocp/i27-cluster
 ```
 
 ### Verify, Backup & Customize Configuration
 
-Before deploying the cluster, verify the file and prepare your custom configuration.
-
 1.  **Verify & Backup:**
-
     ```bash
-    # Verify file exists
-    ls /root/ocp/i27-cluster/install-config.yaml
-
-    # Create a backup of the original configuration
     cp /root/ocp/i27-cluster/install-config.yaml /root/ocp/i27-cluster/install-config-ORIGINAL.yaml
     ```
-
-2.  **Customize for Deployment:**
-    You must now modify the `install-config.yaml` to meet your production requirements (e.g., node counts, machine types). Use the following link as a template:
-
-    > **Reference Link:** [i27Academy GitHub - install-config.yaml](https://github.com/i27academy/openshift/blob/main/Cluster-Creation/install-config.yaml)
-
-    ⚠️ **CRITICAL:** Do **not** directly copy and paste the GitHub file. It is provided strictly as a reference. You must modify your own local file based on this template to ensure specific fields like `pullSecret`, `sshKey`, and `projectID` remain correct for your environment.
+2.  **Customize:** Modify `install-config.yaml` using the [i27Academy Template](https://github.com/i27academy/openshift/blob/main/Cluster-Creation/install-config.yaml) as a reference.
 
 -----
 
 ## 🚀 Phase 6: Launching & Verifying
 
-### 1\. Trigger Cluster Creation (Takes 30-45 mins)
+### 1\. Trigger Cluster Creation (30-45 mins)
 
 ```bash
 ./openshift-install create cluster --dir=/root/ocp/i27-cluster --log-level debug
@@ -183,7 +177,6 @@ Before deploying the cluster, verify the file and prepare your custom configurat
 
 ```bash
 export KUBECONFIG=/root/ocp/i27-cluster/auth/kubeconfig
-# Get login info
 cat /root/ocp/i27-cluster/auth/kubeadmin-password
 oc get route console -n openshift-console
 ```
