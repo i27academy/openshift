@@ -1,3 +1,0 @@
-## Deploy
-# strategy
-# rollout rollback 
